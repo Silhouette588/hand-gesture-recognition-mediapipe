@@ -4,6 +4,8 @@ import csv
 import copy
 import argparse
 import itertools
+import time
+from djitellopy_reduced import tello
 from collections import Counter
 from collections import deque
 
@@ -15,13 +17,13 @@ from utils import CvFpsCalc
 from model import KeyPointClassifier
 from model import PointHistoryClassifier
 
-
 def get_args():
     parser = argparse.ArgumentParser()
 
     parser.add_argument("--device", type=int, default=0)
-    parser.add_argument("--width", help='cap width', type=int, default=960)
-    parser.add_argument("--height", help='cap height', type=int, default=540)
+    parser.add_argument("--width", help='cap width', type=int, default=480)
+    parser.add_argument("--height", help='cap height', type=int, default=480) #was 270
+    parser.add_argument("--fps", help='cap fps', type=int, default=1)
 
     parser.add_argument('--use_static_image_mode', action='store_true')
     parser.add_argument("--min_detection_confidence",
@@ -45,6 +47,7 @@ def main():
     cap_device = args.device
     cap_width = args.width
     cap_height = args.height
+    cap_fps = args.fps
 
     use_static_image_mode = args.use_static_image_mode
     min_detection_confidence = args.min_detection_confidence
@@ -56,6 +59,7 @@ def main():
     cap = cv.VideoCapture(cap_device)
     cap.set(cv.CAP_PROP_FRAME_WIDTH, cap_width)
     cap.set(cv.CAP_PROP_FRAME_HEIGHT, cap_height)
+    cap.set(cv.CAP_PROP_FPS, 1)
 
     # Model load #############################################################
     mp_hands = mp.solutions.hands
@@ -67,6 +71,12 @@ def main():
     )
 
     keypoint_classifier = KeyPointClassifier()
+
+    liftoff_only_once = True
+    land_only_once = False
+    drone = tello.Tello()
+    drone.connect()
+    print(drone.get_battery())
 
     point_history_classifier = PointHistoryClassifier()
 
@@ -88,6 +98,7 @@ def main():
     # FPS Measurement ########################################################
     cvFpsCalc = CvFpsCalc(buffer_len=10)
 
+
     # Coordinate history #################################################################
     history_length = 16
     point_history = deque(maxlen=history_length)
@@ -97,6 +108,8 @@ def main():
 
     #  ########################################################################
     mode = 0
+
+    v = 4
 
     while True:
         fps = cvFpsCalc.get()
@@ -141,10 +154,37 @@ def main():
 
                 # Hand sign classification
                 hand_sign_id = keypoint_classifier(pre_processed_landmark_list)
-                if hand_sign_id == 2:  # Point gesture
+                if hand_sign_id == 2 and v == 4:  # Point gesture
                     point_history.append(landmark_list[8])
+                    v = v - 1
+                    x, y, z = hand_landmarks.landmark[8].x, hand_landmarks.landmark[8].y, hand_landmarks.landmark[8].z
+                    print(x, y, z)
+
+                    x, y, z = int(50-(x*100)), int(50-(y*100)), int(50+(z*1000))
+                    print(x, y, z)
+
+                    drone.go_xyz_speed(x, y, z, 10)
+                    v = v-1
+
+
+
+                elif hand_sign_id == 1 and liftoff_only_once:  # Close gesture
+                    liftoff_only_once = False
+                    land_only_once = True
+                    drone.takeoff()
+                    time.sleep(0.5)
+
+                elif hand_sign_id == 3 and land_only_once:  # OK gesture
+                    land_only_once = False
+                    liftoff_only_once = True
+                    drone.land()
+                    time.sleep(0.5)
+
                 else:
                     point_history.append([0, 0])
+
+                if v == 0:
+                    v = 4
 
                 # Finger gesture classification
                 finger_gesture_id = 0
